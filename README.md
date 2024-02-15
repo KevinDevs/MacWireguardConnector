@@ -6,6 +6,7 @@ change wg0 in the code to your own wireguard conf file name.
 make sure to add 
 
 ```YOURMACUSERNAME ALL = (root) NOPASSWD: /usr/local/bin/wg-quick```
+
 ```YOURMACUSERNAME ALL = (root) NOPASSWD: /usr/local/bin/wg```
 
 using command
