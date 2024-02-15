@@ -1,10 +1,12 @@
 Uses apple script to run wg-quick on terminal to on/off vpn, 
 change wg0 in the code to your own wireguard conf file name.
+
 ```sudo wg-quick up [wg0];exit```
+
 make sure to add 
 
-```YOURMACUSERNAME ALL = (root) NOPASSWD: /usr/local/bin/wg-quick
-YOURMACUSERNAME ALL = (root) NOPASSWD: /usr/local/bin/wg```
+```YOURMACUSERNAME ALL = (root) NOPASSWD: /usr/local/bin/wg-quick```
+```YOURMACUSERNAME ALL = (root) NOPASSWD: /usr/local/bin/wg```
 
 using command
 
