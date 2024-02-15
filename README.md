@@ -1,7 +1,13 @@
-Uses apple script to run wg-quick on terminal to on/off vpn, 
-change wg0 in the code to your own wireguard conf file name.
+PREREQ:
+```brew install wireguard-tools```
 
-```sudo wg-quick up [wg0];exit```
+Your config file:
+```/usr/local/etc/wireguard/YOURCONFIG.conf```
+
+Uses apple script to run wg-quick on terminal to on/off vpn, 
+change YOURCONF in the code to your own wireguard conf file name.
+
+```sudo wg-quick up [YOURCONF];exit```
 
 make sure to add 
 
