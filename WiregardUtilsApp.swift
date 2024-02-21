@@ -8,7 +8,7 @@ struct WireguardUtilsApp: App {
     var body: some Scene {
         WindowGroup {
             //
-            ContentView(viewModel: appDelegate.contentViewViewModel, toggleVPNAction: appDelegate.toggleVPN)
+            ContentView(viewModel: appDelegate.contentViewViewModel, connectTunnel: appDelegate.connectTunnel)
                             .frame(width: 800, height: 600)
                             .background(WindowAccessor())
         }
@@ -43,7 +43,7 @@ struct WindowAccessor: NSViewRepresentable {
         let view = NSView()
         DispatchQueue.main.async {
             if let window = view.window {
-                let windowController = CustomWindowController(window: window, contentView: AnyView(ContentView(viewModel: appDelegate.contentViewViewModel, toggleVPNAction: appDelegate.toggleVPN)), width: 800, height: 600)
+                let windowController = CustomWindowController(window: window, contentView: AnyView(ContentView(viewModel: appDelegate.contentViewViewModel, connectTunnel: appDelegate.connectTunnel)), width: 800, height: 600)
                 window.windowController = windowController
             }
         }
@@ -87,11 +87,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var statusUpdateTimer: Timer?
     var contentViewViewModel = ViewModel()
     var selectedTunnelItem: NSMenuItem?
+    var configFileViewItem: [NSMenuItem] = []
     
     
     
-    let files: [String] = listFilenamesWithoutSuffixes(directoryPath: "/usr/local/etc/wireguard/")
+    let files: [String] = listFilenamesWithoutSuffixes(directoryPath: "/usr/local/etc/wireguard/");
+    
+    
+    
     func applicationDidFinishLaunching(_ notification: Notification) {
+        
+        contentViewViewModel.tunnels = listFilenamesWithoutSuffixes(directoryPath: "/usr/local/etc/wireguard/");
         
         // Setup the menu bar item
         statusBarItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -120,6 +126,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                         keyEquivalent: ""
                     )
                     menuItem.representedObject = file
+                    configFileViewItem.append(menuItem)
                     statusBarMenu.addItem(menuItem)
                 }
             }
@@ -144,7 +151,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Initialize VPN status check
         checkVPNStatus()
-        statusUpdateTimer = Timer.scheduledTimer(timeInterval: 1.0, target: self, selector: #selector(checkVPNStatus), userInfo: nil, repeats: true)
+        statusUpdateTimer = Timer.scheduledTimer(timeInterval: 5.0, target: self, selector: #selector(checkVPNStatus), userInfo: nil, repeats: true)
     }
     
     
@@ -160,12 +167,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                 }else if(self.contentViewViewModel.selectTunnel != file){
                     self.contentViewViewModel.selectTunnel = file
-                    self.stopVPN()
+                    self.stopVPNV2()
                     self.startVPN()
                     sender.state = .on
                     selectedTunnelItem?.state = .off
                 }else{
-                    self.stopVPN()
+                    self.stopVPNV2()
                     sender.state = .off
                     selectedTunnelItem?.state = .off
                 }
@@ -210,6 +217,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     
+    func connectTunnel() {
+                if(self.contentViewViewModel.UIText == "Waiting for connection"){
+                    self.startVPN()
+                }else if(self.contentViewViewModel.selectTunnel != self.contentViewViewModel.connTunnel){
+                    self.stopVPNV2()
+                    self.startVPN()
+                }else{
+                    self.stopVPNV2()
+                }
+                print("Selected Tunnel: \(self.contentViewViewModel.selectTunnel)")
+        }
+    
     
     
     
@@ -225,7 +244,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         self.startVPNItem?.action = nil
         self.contentViewViewModel.UIText = "Connecting..."
         self.updateStatus(with: "Connecting...")
+        contentViewViewModel.connTunnel = self.contentViewViewModel.selectTunnel;
         runCommand("sudo wg-quick up "+self.contentViewViewModel.selectTunnel+";exit;")
+        checkVPNStatus()
     }
 
     @objc func stopVPN() {
@@ -233,12 +254,55 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         self.startVPNItem?.action = nil
         self.contentViewViewModel.UIText = "Disconnecting..."
         self.updateStatus(with: "Disconnecting...")
+        contentViewViewModel.connTunnel = "None"
         for tunnel in files{
-            print(tunnel)
             runCommand("sudo wg-quick down "+tunnel+";networksetup -setdnsservers Wi-Fi empty;exit;")
             sleep(1)
         }
         
+    }
+    
+    @objc func stopVPNV2() {
+        self.startVPNItem?.title = "Disconnecting..."
+        self.startVPNItem?.action = nil
+        self.contentViewViewModel.UIText = "Disconnecting..."
+        self.updateStatus(with: "Disconnecting...")
+        contentViewViewModel.connTunnel = "None"
+        DispatchQueue.global(qos: .background).async {
+            let process = Process()
+            let pipe = Pipe()
+            
+            process.launchPath = "/bin/zsh"
+            // Command to execute the provided shell script
+            let command = """
+            peer_key=$(sudo /usr/local/bin/wg show | awk '/peer:/ { print $2; exit }')
+            if [ -z "$peer_key" ]; then
+                echo "No active WireGuard interfaces found."
+            else
+                config_file=$(grep -l "$peer_key" /usr/local/etc/wireguard/*.conf)
+                if [ -z "$config_file" ]; then
+                    echo "No configuration file found for the active WireGuard peer."
+                else
+                    config_file_name=$(basename "$config_file" .conf)
+                    echo "$config_file_name"
+                fi
+            fi
+            """
+            process.arguments = ["-c", command]
+            process.standardOutput = pipe
+            process.launch()
+            
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let output = String(data: data, encoding: .utf8) ?? ""
+            
+            DispatchQueue.main.async {
+                // Process the output here
+                // For example, print it or update the UI
+                self.runCommand("sudo wg-quick down "+output+";networksetup -setdnsservers Wi-Fi empty;exit;")
+                sleep(1)
+                self.checkVPNStatus()
+            }
+        }
     }
 
     @objc func quitApp() {
@@ -285,7 +349,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async {
                 if output.contains("interface"){
                     self.selectedTunnelItem?.state = .off
-                    self.stopVPN()
+                    self.stopVPNV2()
                 }else{
                     self.startVPN()
                 }
@@ -294,6 +358,67 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     @objc func checkVPNStatus() {
+        DispatchQueue.global(qos: .background).async {
+            let process = Process()
+            let pipe = Pipe()
+            
+            process.launchPath = "/bin/zsh"
+            // Command to execute the provided shell script
+            let command = """
+            peer_key=$(sudo /usr/local/bin/wg show | awk '/peer:/ { print $2; exit }')
+            if [ -z "$peer_key" ]; then
+                echo "No active WireGuard interfaces found."
+            else
+                config_file=$(grep -l "$peer_key" /usr/local/etc/wireguard/*.conf)
+                if [ -z "$config_file" ]; then
+                    echo "No configuration file found for the active WireGuard peer."
+                else
+                    config_file_name=$(basename "$config_file" .conf)
+                    echo "$config_file_name"
+                fi
+            fi
+            """
+            process.arguments = ["-c", command]
+            process.standardOutput = pipe
+            process.launch()
+            
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let output = String(data: data, encoding: .utf8) ?? ""
+            
+            DispatchQueue.main.async {
+                if output.contains("No active WireGuard interfaces found."){
+                    if self.startVPNItem?.title == "Disconnecting..." || self.startVPNItem?.title == "Init"{
+                        self.updateStatus(with: "VPN Stopped")
+                        self.startVPNItem?.title = "Select a tunnel below to start connection"
+                        self.startVPNItem?.action = nil
+                        self.contentViewViewModel.UIText = "Waiting for connection"
+                        for item in self.configFileViewItem{
+                                item.state = .off
+                        }
+                    }
+                }else{
+                    let trimmedOutput = output.trimmingCharacters(in: .whitespacesAndNewlines)
+                    self.contentViewViewModel.connTunnel = trimmedOutput
+                    if self.startVPNItem?.title == "Connecting..." || self.startVPNItem?.title == "Init" || self.startVPNItem?.title == "Disconnect VPN"{
+                        self.updateStatus(with: "VPN Running")
+                        self.startVPNItem?.title = "Disconnect VPN"
+                        self.startVPNItem?.action = #selector(self.toggleVPN)
+                        //update menu config
+                        for item in self.configFileViewItem{
+                            if item.title.lowercased().contains(trimmedOutput.lowercased()){
+                                item.state = .on
+                            }else{
+                                item.state = .off
+                            }
+                        }
+                        self.contentViewViewModel.UIText = output
+                    }
+                }
+            }
+        }
+    }
+    
+    @objc func checkVPNStatusOld() {
         DispatchQueue.global(qos: .background).async {
             let process = Process()
             let pipe = Pipe()
@@ -314,6 +439,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                         self.updateStatus(with: "VPN Running")
                         self.startVPNItem?.title = "Disconnect VPN"
                         self.startVPNItem?.action = #selector(self.toggleVPN)
+                        //update menu config
+                        for item in self.configFileViewItem{
+                            if(item.title == self.contentViewViewModel.connTunnel){
+                                item.state = .on
+                            }else{
+                                item.state = .off
+                            }
+                        }
                         self.contentViewViewModel.UIText = output
                     }
                 }else{
@@ -322,6 +455,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                         self.startVPNItem?.title = "Select a tunnel below to start connection"
                         self.startVPNItem?.action = nil
                         self.contentViewViewModel.UIText = "Waiting for connection"
+                        for item in self.configFileViewItem{
+                                item.state = .off
+                        }
                     }
                 }
             }
@@ -363,83 +499,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func updateStatusMenuItem(with status: String) {
         DispatchQueue.main.async {
             self.statusMenuItem?.title = "Status: \(status)"
-        }
-    }
-}
-
-class ViewModel: ObservableObject {
-    @Published var UIText: String = "Please Select A Tunnel"
-    @Published var selectTunnel: String = "Please Select Tunnel"
-}
-
-struct ContentView: View {
-    @ObservedObject var viewModel: ViewModel
-    
-    let toggleVPNAction: () -> Void
-    
-    func openWGConfig(){
-        NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: "/usr/local/etc/wireguard/")
-    }
-    
-    func noAction(){
-        
-    }
-
-    var body: some View {
-        VStack {
-            if(viewModel.selectTunnel != "Please Select Tunnel"){
-                //Text("Selected Tunnel: " + viewModel.selectTunnel).padding()
-            }
-                
-            
-            Text(viewModel.UIText).padding() // Adds padding around the text
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            
-            
-            
-            if viewModel.UIText.contains("interface"){
-                Button(action: toggleVPNAction) {
-                    Text("Disconnect VPN")
-                        .padding()
-                        .background(Color.blue)
-                        .foregroundColor(.white)
-                        .cornerRadius(10)
-                }
-            }else if viewModel.UIText.contains("Connecting"){
-                Button(action: toggleVPNAction) {
-                    Text("Connecting...")
-                        .padding()
-                        .background(Color.blue)
-                        .foregroundColor(.white)
-                        .cornerRadius(10)
-                }
-            }else if viewModel.UIText.contains("Disconnecting"){
-                Button(action: toggleVPNAction) {
-                    Text("Disconnecting...")
-                        .padding()
-                        .background(Color.blue)
-                        .foregroundColor(.white)
-                        .cornerRadius(10)
-                }
-            }else{
-                Button(action: noAction) {
-                    Text("Select a tunnel in menu to connect")
-                        .padding()
-                        .background(Color.blue)
-                        .foregroundColor(.white)
-                        .cornerRadius(10)
-                }
-            }
-            
-            Button(action: openWGConfig) {
-                Text("Open Wireguard Tunnels Folder")
-                    .padding()
-                    .background(Color.blue)
-                    .foregroundColor(.white)
-                    .cornerRadius(10)
-            }
-
-            
         }
     }
 }
